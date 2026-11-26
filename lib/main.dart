@@ -65,7 +65,11 @@ class _LibraryPageState extends State<LibraryPage> {
 
   WatchStore get store => widget.store;
 
-  Gateway? get _gateway {
+  late Gateway? _gateway = _savedGateway();
+
+  Gateway? _savedGateway() {
+    final subscription = store.subscription;
+    if (subscription != null) return TvboxGateway(Uri.parse(subscription));
     final address = store.server;
     return address == null ? null : Gateway(Uri.parse(address));
   }
@@ -101,16 +105,25 @@ class _LibraryPageState extends State<LibraryPage> {
     }
   }
 
-  Future<void> _settings() async {
+  Future<void> _settings(bool subscription) async {
     final next = await showDialog<String>(
       context: context,
-      builder: (_) => AddressDialog(previous: store.server, server: true),
+      builder: (_) => AddressDialog(
+        previous: subscription ? store.subscription : store.server,
+        server: !subscription,
+        subscription: subscription,
+      ),
     );
     if (next == null || !mounted) return;
-    await store.setServer(next.isEmpty ? null : next);
+    final selected = next.isEmpty
+        ? null
+        : subscription
+        ? TvboxGateway(Uri.parse(next))
+        : Gateway(Uri.parse(next));
+    await store.setSource(selected);
     if (!mounted) return;
-    setState(() {});
-    if (_results != null || next.isNotEmpty) _search(_query.text);
+    _gateway = selected;
+    _search(_query.text);
   }
 
   Future<void> _direct() async {
@@ -226,9 +239,17 @@ class _LibraryPageState extends State<LibraryPage> {
       appBar: AppBar(
         title: const Text(appName, style: TextStyle(fontWeight: FontWeight.bold)),
         actions: [
-          IconButton(
-            tooltip: '来源设置', icon: const Icon(Icons.tune),
-            onPressed: _settings,
+          PopupMenuButton<bool>(
+            tooltip: '来源设置',
+            icon: const Icon(Icons.tune),
+            onSelected: _settings,
+            itemBuilder: (_) => [
+              PopupMenuItem(
+                value: true,
+                child: Text(store.subscription == null ? '添加 TVBox 订阅' : '管理 TVBox 订阅'),
+              ),
+              const PopupMenuItem(value: false, child: Text('连接来源服务')),
+            ],
           ),
         ],
       ),
@@ -309,10 +330,13 @@ class _LibraryPageState extends State<LibraryPage> {
 }
 
 class AddressDialog extends StatefulWidget {
-  const AddressDialog({super.key, this.previous, this.server = false});
+  const AddressDialog({
+    super.key, this.previous, this.server = false, this.subscription = false,
+  });
 
   final String? previous;
   final bool server;
+  final bool subscription;
 
   @override
   State<AddressDialog> createState() => _AddressDialogState();
@@ -327,22 +351,29 @@ class _AddressDialogState extends State<AddressDialog> {
     if (_checking) return;
     final value = _address.text.trim();
     final uri = Uri.tryParse(value);
-    if (uri == null || !validAddress(uri) || (widget.server && (uri.hasQuery || uri.hasFragment))) {
-      setState(() => _error = '请输入有效的 HTTP 或 HTTPS 地址');
+    if (uri == null || !validAddress(uri) ||
+        (widget.subscription && !TvboxGateway.supports(uri)) ||
+        (widget.server && (uri.hasQuery || uri.hasFragment))) {
+      setState(() => _error = widget.subscription
+          ? '请输入 HTTPS 的 TVBox 订阅地址'
+          : '请输入有效的 HTTP 或 HTTPS 地址');
       return;
     }
-    if (widget.server) {
+    if (widget.server || widget.subscription) {
       setState(() {
         _checking = true;
         _error = null;
       });
       try {
-        await Gateway(uri).check();
+        final gateway = widget.subscription ? TvboxGateway(uri) : Gateway(uri);
+        await gateway.check();
       } catch (error) {
         if (!mounted) return;
         setState(() {
           _checking = false;
-          _error = errorMessage(error, '连接失败，请检查地址和服务状态');
+          _error = errorMessage(error, widget.subscription
+              ? '无法读取订阅，请检查地址和网络'
+              : '连接失败，请检查地址和服务状态');
         });
         return;
       }
@@ -358,14 +389,16 @@ class _AddressDialogState extends State<AddressDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-    title: Text(widget.server ? '来源服务' : '打开视频链接'),
+    title: Text(widget.subscription ? 'TVBox 订阅' : widget.server ? '来源服务' : '打开视频链接'),
     content: TextField(
       controller: _address,
       autofocus: true,
       keyboardType: TextInputType.url,
       onSubmitted: (_) => _submit(),
       decoration: InputDecoration(
-        hintText: widget.server ? 'http://127.0.0.1:8765' : 'https://…/video.m3u8',
+        hintText: widget.subscription
+            ? 'https://…/config.json'
+            : widget.server ? 'http://127.0.0.1:8765' : 'https://…/video.m3u8',
         errorText: _error,
       ),
     ),
@@ -375,7 +408,8 @@ class _AddressDialogState extends State<AddressDialog> {
       TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('取消')),
       FilledButton(
         onPressed: _checking ? null : _submit,
-        child: Text(_checking ? '连接中…' : widget.server ? '连接' : '播放'),
+        child: Text(_checking ? '正在读取…'
+            : widget.subscription ? '保存订阅' : widget.server ? '连接' : '播放'),
       ),
     ],
   );

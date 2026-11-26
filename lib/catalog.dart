@@ -1,7 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:xml/xml.dart';
+
+part 'tvbox.dart';
 
 typedef Json = Map<String, dynamic>;
 
@@ -77,6 +81,8 @@ class Gateway {
   const Gateway(this.base);
 
   final Uri base;
+
+  String get kind => 'server';
 
   Uri _route(String path, [Map<String, String>? query]) => base.replace(
     path: '${base.path.replaceFirst(RegExp(r'/+$'), '')}/$path',
@@ -190,7 +196,11 @@ class WatchEntry {
       ),
       lineKey: data['lineKey'] as String,
       position: Duration(milliseconds: data['position'] as int),
-      gateway: base == null ? null : Gateway(Uri.parse(base)),
+      gateway: base == null
+          ? null
+          : data['gatewayKind'] == 'tvbox'
+          ? TvboxGateway(Uri.parse(base))
+          : Gateway(Uri.parse(base)),
     );
   }
 
@@ -198,6 +208,7 @@ class WatchEntry {
     'workId': workId, 'title': title, 'episodeId': episode.id,
     'episode': episode.name, 'lines': episode.lines.map((line) => line.toJson()).toList(),
     'lineKey': lineKey, 'position': position.inMilliseconds, 'gateway': gateway?.base.toString(),
+    'gatewayKind': gateway?.kind,
   };
 }
 
@@ -211,12 +222,18 @@ class WatchStore {
   final List<WatchEntry> entries;
 
   String? get server => prefs.getString('gateway');
+  String? get subscription => prefs.getString('tvboxSubscription');
 
-  Future<void> setServer(String? address) async {
-    if (address == null) {
+  Future<void> setSource(Gateway? source) async {
+    if (source is TvboxGateway) {
+      await prefs.setString('tvboxSubscription', source.base.toString());
       await prefs.remove('gateway');
+    } else if (source != null) {
+      await prefs.setString('gateway', source.base.toString());
+      await prefs.remove('tvboxSubscription');
     } else {
-      await prefs.setString('gateway', address);
+      await prefs.remove('gateway');
+      await prefs.remove('tvboxSubscription');
     }
   }
 
