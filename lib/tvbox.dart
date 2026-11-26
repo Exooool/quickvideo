@@ -57,9 +57,10 @@ class TvboxGateway extends Gateway {
       if (type == '3' && api is String && cspClass.hasMatch(api.trim())) {
         plugins++;
         final declared = entry['jar'] ?? baseSpider;
-        final fingerprint = declared is String
-            ? RegExp(r';md5;([0-9a-fA-F]{32})\s*$').firstMatch(declared)?[1]?.toLowerCase()
+        final match = declared is String
+            ? RegExp(r';md5;([0-9a-fA-F]{32})\s*$').firstMatch(declared)
             : null;
+        final fingerprint = match?.group(1)?.toLowerCase();
         if (canSearch && installed != null && fingerprint == installed.md5) {
           final id = entry['key']?.toString().trim() ?? api.trim();
           final ext = entry['ext'];
@@ -202,7 +203,7 @@ class TvboxGateway extends Gateway {
         if (site.cspApi == null && (!supports(uri) || _format(uri!) == null)) continue;
         final name = separator < 0 ? '' : item.substring(0, separator).trim();
         final episodeName = name.isEmpty ? '正片' : name;
-        final digits = _episodeNumber.firstMatch(episodeName)?[1];
+        final digits = _episodeNumber.firstMatch(episodeName)?.group(1);
         final number = digits == null ? null : int.tryParse(digits);
         final episodeId = number == null ? episodeName : 'episode-$number';
         final lineId = jsonEncode([workId, index, episodeId]);
