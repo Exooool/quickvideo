@@ -31,23 +31,53 @@ class TvboxGateway extends Gateway {
     if (tree is! Json || tree['sites'] is! List) {
       throw const FormatException('订阅配置缺少 sites 列表');
     }
+    final entries = (tree['sites'] as List).whereType<Json>().toList();
+    if (entries.isEmpty) throw const FormatException('订阅的点播来源列表为空');
     final sites = <String, _CmsSite>{};
-    for (final entry in (tree['sites'] as List).whereType<Json>()) {
+    var plugins = 0;
+    var httpCms = 0;
+    var disabled = 0;
+    var unsupported = 0;
+    for (final entry in entries) {
       final type = entry['type']?.toString();
       final searchable = entry['searchable']?.toString().toLowerCase();
       final api = entry['api'];
-      if ((type != '0' && type != '1') ||
-          searchable == '0' || searchable == 'false' || api is! String) {
+      if (type == '3' && api is String && api.trim().startsWith('csp_')) {
+        plugins++;
+        continue;
+      }
+      if (searchable == '0' || searchable == 'false') {
+        disabled++;
+        continue;
+      }
+      if ((type != '0' && type != '1') || api is! String) {
+        unsupported++;
         continue;
       }
       final url = _resolveUri(payload.uri, api);
-      if (!supports(url)) continue;
+      if (!supports(url)) {
+        if (url?.scheme == 'http') {
+          httpCms++;
+        } else {
+          unsupported++;
+        }
+        continue;
+      }
       final key = entry['key']?.toString().trim();
       final id = key == null || key.isEmpty ? url.toString() : key;
       sites[id] = _CmsSite(id, entry['name']?.toString() ?? id, url!, type == '0');
     }
     if (sites.isEmpty) {
-      throw const FormatException('订阅里没有可搜索的 HTTPS CMS 源（type 0 或 1）');
+      final counts = [
+        if (plugins > 0) '$plugins 个 CSP 插件源（type 3，需要 TVBox 插件运行时）',
+        if (httpCms > 0) '$httpCms 个 HTTP CMS 源（手机直连需要 HTTPS）',
+        if (disabled > 0) '$disabled 个未开启搜索的来源',
+        if (unsupported > 0) '$unsupported 个其他不兼容的来源',
+      ];
+      throw FormatException(
+        '已读取订阅里的 ${entries.length} 个点播来源，但没有可搜索的 HTTPS CMS 源。'
+        '\n${counts.join('。')}。',
+      );
     }
     return sites;
   }
