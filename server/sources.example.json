@@ -1,0 +1,32 @@
+[
+  {
+    "id": "demo-a",
+    "name": "样例 · 高清",
+    "items": [
+      {
+        "id": "main",
+        "workId": "demo",
+        "title": "来源服务测试片",
+        "kind": "测试视频",
+        "episode": "第 1 集",
+        "episodeId": "1",
+        "demoAsset": "demo.mp4"
+      }
+    ]
+  },
+  {
+    "id": "demo-b",
+    "name": "样例 · 流畅",
+    "items": [
+      {
+        "id": "alt",
+        "workId": "demo",
+        "title": "来源服务测试片",
+        "kind": "测试视频",
+        "episode": "第 1 集",
+        "episodeId": "1",
+        "demoAsset": "demo_alt.mp4"
+      }
+    ]
+  }
+]

@@ -1,0 +1,8 @@
+.dart_tool/
+.flutter-plugins-dependencies
+.metadata
+build/
+android/.gradle/
+android/local.properties
+server/sources.local.json
+__pycache__/
