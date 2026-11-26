@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -69,7 +70,9 @@ class _LibraryPageState extends State<LibraryPage> {
 
   Gateway? _savedGateway() {
     final subscription = store.subscription;
-    if (subscription != null) return TvboxGateway(Uri.parse(subscription));
+    if (subscription != null) {
+      return TvboxGateway(Uri.parse(subscription), plugin: store.cspPlugin, cspSite: store.cspSite);
+    }
     final address = store.server;
     return address == null ? null : Gateway(Uri.parse(address));
   }
@@ -105,25 +108,61 @@ class _LibraryPageState extends State<LibraryPage> {
     }
   }
 
-  Future<void> _settings(bool subscription) async {
+  Future<void> _settings(String action) async {
+    if (action == 'csp') {
+      await _importCsp();
+      return;
+    }
+    final subscription = action == 'subscription';
+    String? cspSite;
     final next = await showDialog<String>(
       context: context,
       builder: (_) => AddressDialog(
         previous: subscription ? store.subscription : store.server,
         server: !subscription,
         subscription: subscription,
+        cspPlugin: store.cspPlugin,
+        onCspSelected: (key) => cspSite = key,
       ),
     );
     if (next == null || !mounted) return;
     final selected = next.isEmpty
         ? null
         : subscription
-        ? TvboxGateway(Uri.parse(next))
+        ? TvboxGateway(Uri.parse(next), plugin: store.cspPlugin, cspSite: cspSite)
         : Gateway(Uri.parse(next));
     await store.setSource(selected);
     if (!mounted) return;
     _gateway = selected;
     _search(_query.text);
+  }
+
+  Future<void> _importCsp() async {
+    try {
+      final plugin = await CspPlugin.pick();
+      if (!mounted || plugin == null) return;
+      final approved = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('信任本地 CSP 插件？'),
+          content: Text('插件运行时会拥有本应用的权限。请只导入你验证过来源的文件。'
+              '\n\nSHA-256：${plugin.sha256}'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('信任插件')),
+          ],
+        ),
+      );
+      if (!mounted || approved != true) return;
+      await store.setCspPlugin(plugin);
+      if (!mounted) return;
+      await _settings('subscription');
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(errorMessage(error, '无法导入本地 CSP 插件')),
+      ));
+    }
   }
 
   Future<void> _direct() async {
@@ -239,16 +278,18 @@ class _LibraryPageState extends State<LibraryPage> {
       appBar: AppBar(
         title: const Text(appName, style: TextStyle(fontWeight: FontWeight.bold)),
         actions: [
-          PopupMenuButton<bool>(
+          PopupMenuButton<String>(
             tooltip: '来源设置',
             icon: const Icon(Icons.tune),
             onSelected: _settings,
             itemBuilder: (_) => [
               PopupMenuItem(
-                value: true,
+                value: 'subscription',
                 child: Text(store.subscription == null ? '添加 TVBox 订阅' : '管理 TVBox 订阅'),
               ),
-              const PopupMenuItem(value: false, child: Text('连接来源服务')),
+              if (Platform.isAndroid)
+                const PopupMenuItem(value: 'csp', child: Text('导入本地 CSP 插件')),
+              const PopupMenuItem(value: 'server', child: Text('连接来源服务')),
             ],
           ),
         ],
@@ -332,11 +373,14 @@ class _LibraryPageState extends State<LibraryPage> {
 class AddressDialog extends StatefulWidget {
   const AddressDialog({
     super.key, this.previous, this.server = false, this.subscription = false,
+    this.cspPlugin, this.onCspSelected,
   });
 
   final String? previous;
   final bool server;
   final bool subscription;
+  final CspPlugin? cspPlugin;
+  final ValueChanged<String>? onCspSelected;
 
   @override
   State<AddressDialog> createState() => _AddressDialogState();
@@ -365,8 +409,32 @@ class _AddressDialogState extends State<AddressDialog> {
         _error = null;
       });
       try {
-        final gateway = widget.subscription ? TvboxGateway(uri) : Gateway(uri);
+        final gateway = widget.subscription
+            ? TvboxGateway(uri, plugin: widget.cspPlugin)
+            : Gateway(uri);
         await gateway.check();
+        if (!mounted) return;
+        if (gateway is TvboxGateway && gateway.cspChoices.isNotEmpty) {
+          final selected = await showDialog<String>(
+            context: context,
+            builder: (context) => SimpleDialog(
+              title: const Text('选择一个 CSP 来源'),
+              children: [
+                for (final item in gateway.cspChoices.entries)
+                  SimpleDialogOption(
+                    onPressed: () => Navigator.pop(context, item.key),
+                    child: Text(item.value),
+                  ),
+              ],
+            ),
+          );
+          if (!mounted) return;
+          if (selected == null) {
+            setState(() => _checking = false);
+            return;
+          }
+          widget.onCspSelected?.call(selected);
+        }
       } catch (error) {
         if (!mounted) return;
         setState(() {

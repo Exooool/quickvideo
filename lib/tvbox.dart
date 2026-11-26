@@ -1,7 +1,12 @@
 part of 'catalog.dart';
 
 class TvboxGateway extends Gateway {
-  TvboxGateway(super.base);
+  TvboxGateway(super.base, {this.plugin, this.cspSite});
+
+  final CspPlugin? plugin;
+  final String? cspSite;
+  final Map<String, String> cspChoices = {};
+  List<String> _flags = [];
 
   static final _jsonTokens = RegExp(r'"(?:\\.|[^"\\])*"|/\*[\s\S]*?\*/|//[^\r\n]*|,(?=\s*[}\]])');
   static final _episodeNumber = RegExp(r'^(?:第\s*)?(\d+)\s*(?:集|话|話)?$');
@@ -34,19 +39,37 @@ class TvboxGateway extends Gateway {
     final entries = (tree['sites'] as List).whereType<Json>().toList();
     if (entries.isEmpty) throw const FormatException('订阅的点播来源列表为空');
     final sites = <String, _CmsSite>{};
+    final cspSites = <String, _CmsSite>{};
     var plugins = 0;
     var httpCms = 0;
     var disabled = 0;
     var unsupported = 0;
+    final baseSpider = tree['spider'];
+    final flags = tree['flags'];
+    _flags = flags is List ? flags.whereType<String>().toList() : [];
+    final installed = Platform.isAndroid ? plugin : null;
+    final cspClass = RegExp(r'^csp_[A-Za-z_$][A-Za-z0-9_$]{0,127}$');
     for (final entry in entries) {
       final type = entry['type']?.toString();
       final searchable = entry['searchable']?.toString().toLowerCase();
+      final canSearch = searchable != '0' && searchable != 'false';
       final api = entry['api'];
-      if (type == '3' && api is String && api.trim().startsWith('csp_')) {
+      if (type == '3' && api is String && cspClass.hasMatch(api.trim())) {
         plugins++;
+        final declared = entry['jar'] ?? baseSpider;
+        final fingerprint = declared is String
+            ? RegExp(r';md5;([0-9a-fA-F]{32})\s*$').firstMatch(declared)?[1]?.toLowerCase()
+            : null;
+        if (canSearch && installed != null && fingerprint == installed.md5) {
+          final id = entry['key']?.toString().trim() ?? api.trim();
+          final ext = entry['ext'];
+          cspSites[id] = _CmsSite(id, entry['name']?.toString() ?? id, payload.uri, false,
+            cspApi: api.trim(), ext: ext is String ? ext : ext == null ? '' : jsonEncode(ext),
+          );
+        }
         continue;
       }
-      if (searchable == '0' || searchable == 'false') {
+      if (!canSearch) {
         disabled++;
         continue;
       }
@@ -67,15 +90,32 @@ class TvboxGateway extends Gateway {
       final id = key == null || key.isEmpty ? url.toString() : key;
       sites[id] = _CmsSite(id, entry['name']?.toString() ?? id, url!, type == '0');
     }
-    if (sites.isEmpty) {
+    cspChoices
+      ..clear()
+      ..addEntries(cspSites.entries.map((entry) => MapEntry(entry.key, entry.value.name)));
+    if (cspSites.isNotEmpty) {
+      await installed!.check();
+      final chosen = cspSites[cspSite];
+      if (chosen != null) {
+        sites[chosen.id] = chosen;
+      } else if (cspSite != null) {
+        throw const FormatException('订阅中已找不到所选 CSP 来源，请重新选择');
+      }
+    } else if (cspSite != null) {
+      throw const FormatException('订阅已换插件或本地插件已移除，请重新导入并选择 CSP 来源');
+    }
+    if (sites.isEmpty && cspChoices.isEmpty) {
       final counts = [
-        if (plugins > 0) '$plugins 个 CSP 插件源（type 3，需要 TVBox 插件运行时）',
+        if (plugins > 0)
+          installed == null
+              ? '$plugins 个 CSP 来源。请先从来源设置导入该订阅对应的本地插件'
+              : '$plugins 个 CSP 来源与已导入插件不匹配，请检查订阅的插件版本',
         if (httpCms > 0) '$httpCms 个 HTTP CMS 源（手机直连需要 HTTPS）',
         if (disabled > 0) '$disabled 个未开启搜索的来源',
         if (unsupported > 0) '$unsupported 个其他不兼容的来源',
       ];
       throw FormatException(
-        '已读取订阅里的 ${entries.length} 个点播来源，但没有可搜索的 HTTPS CMS 源。'
+        '已读取 ${entries.length} 个点播来源，当前没有可用来源。'
         '\n${counts.join('。')}。',
       );
     }
@@ -91,6 +131,7 @@ class TvboxGateway extends Gateway {
     final answers = List<List<Work>?>.filled(sites.length, null);
     var nextIndex = 0;
     var accepting = true;
+    Exception? onlySourceError;
 
     Future<void> worker() async {
       while (accepting && nextIndex < sites.length) {
@@ -110,7 +151,8 @@ class TvboxGateway extends Gateway {
                   remote: Line(site.id, row['vod_id'].toString(), site.name),
                 ),
           ];
-        } on Exception {
+        } on Exception catch (error) {
+          if (site.cspApi != null && sites.length == 1) onlySourceError = error;
           // Report this source separately so other sources remain searchable.
         }
       }
@@ -125,6 +167,7 @@ class TvboxGateway extends Gateway {
     } finally {
       accepting = false;
     }
+    if (onlySourceError != null) throw onlySourceError!;
     return SearchResult(
       [for (final answer in answers) ...?answer],
       [for (var i = 0; i < sites.length; i++) if (answers[i] == null) sites[i].name],
@@ -154,8 +197,9 @@ class TvboxGateway extends Gateway {
       for (final item in groups[index].split('#')) {
         final separator = item.indexOf(r'$');
         final address = separator < 0 ? item : item.substring(separator + 1);
-        final uri = _resolveUri(data.uri, address);
-        if (!supports(uri) || _format(uri!) == null) continue;
+        if (address.trim().isEmpty) continue;
+        final uri = site.cspApi == null ? _resolveUri(data.uri, address) : null;
+        if (site.cspApi == null && (!supports(uri) || _format(uri!) == null)) continue;
         final name = separator < 0 ? '' : item.substring(0, separator).trim();
         final episodeName = name.isEmpty ? '正片' : name;
         final digits = _episodeNumber.firstMatch(episodeName)?[1];
@@ -167,7 +211,7 @@ class TvboxGateway extends Gateway {
           episodeId, () => Episode(episodeId, episodeName, []),
         );
         episode.lines.add(Line(site.id, lineId, label.isEmpty ? '线路 ${index + 1}' : label,
-          url: uri!.toString(),
+          url: site.cspApi == null ? uri!.toString() : jsonEncode([label, address.trim()]),
         ));
       }
     }
@@ -181,6 +225,39 @@ class TvboxGateway extends Gateway {
     for (final episode in episodes) {
       for (final current in episode.lines) {
         if (current.id != line.id) continue;
+        final site = (await _getSites())[line.source];
+        if (site != null && site.cspApi != null) {
+          final request = (jsonDecode(current.url!) as List).cast<String>();
+          final result = await plugin!.invoke(site, 'play', {
+            'flag': request[0], 'id': request[1], 'flags': _flags,
+          });
+          final playUrl = result['url'];
+          final uri = playUrl is String ? Uri.tryParse(playUrl) : null;
+          final parse = result['parse']?.toString();
+          final separate = result['jx']?.toString();
+          if (!supports(uri) ||
+              (parse != null && parse != '0' && parse != 'false') ||
+              (separate != null && separate != '0' && separate != 'false')) {
+            throw const FormatException('CSP 未返回可直连的 HTTPS 视频，网页解析和本地代理暂不可用');
+          }
+          final rawHeaders = result['header'];
+          final headerValues = rawHeaders is String
+              ? _json(rawHeaders, 'CSP 播放请求头格式无效')
+              : rawHeaders;
+          final headers = <String, String>{};
+          if (headerValues is Map) {
+            for (final item in headerValues.entries) {
+              if (item.key is String && item.value is String) {
+                headers[item.key as String] = item.value as String;
+              }
+            }
+          }
+          final type = result['type']?.toString().toLowerCase() ?? '';
+          return Playback(
+            uri: uri, headers: headers,
+            format: type.contains('mpegurl') || type == 'm3u8' ? 'hls' : _format(uri!),
+          );
+        }
         final uri = Uri.parse(current.url!);
         return Playback(uri: uri, format: _format(uri));
       }
@@ -212,9 +289,19 @@ class TvboxGateway extends Gateway {
     }
   }
 
-  static Future<({List<Json> rows, Uri uri})> _cms(
+  Future<({List<Json> rows, Uri uri})> _cms(
     _CmsSite site, Map<String, String> query,
   ) async {
+    if (site.cspApi != null) {
+      final keyword = query['wd'];
+      final payload = keyword == null
+          ? await plugin!.invoke(site, 'detail', {'id': query['ids']})
+          : await plugin!.invoke(site, 'search', {'query': keyword});
+      if (payload['list'] is! List) {
+        throw const FormatException('CSP 插件没有返回视频列表');
+      }
+      return (rows: (payload['list'] as List).whereType<Json>().toList(), uri: site.url);
+    }
     final uri = site.url.replace(
       queryParameters: {...site.url.queryParametersAll, ...query},
       fragment: '',
@@ -295,10 +382,12 @@ class TvboxGateway extends Gateway {
 }
 
 class _CmsSite {
-  const _CmsSite(this.id, this.name, this.url, this.xml);
+  const _CmsSite(this.id, this.name, this.url, this.xml, {this.cspApi, this.ext = ''});
 
   final String id;
   final String name;
   final Uri url;
   final bool xml;
+  final String? cspApi;
+  final String ext;
 }

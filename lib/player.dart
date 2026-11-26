@@ -89,6 +89,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
             ? VideoPlayerController.asset(asset)
             : VideoPlayerController.networkUrl(
                 media.uri!,
+                httpHeaders: media.headers,
                 formatHint: media.format == 'hls' ? VideoFormat.hls : null,
               );
         candidate = next;

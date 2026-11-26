@@ -67,7 +67,13 @@ JSON 来源示例：
 
 打开右上角「来源设置 → 添加 TVBox 订阅」，粘贴 HTTPS 配置地址并保存。然后回到首页输入片名搜索。App 会自行读取订阅、查询各来源，并在选集和播放时向来源请求剧集与播放地址。订阅地址会保存在手机上。
 
-当前支持含 `sites` 的 TVBox JSON 配置、可搜索的 `type: 0`（XML CMS）和 `type: 1`（JSON CMS）以及 HTTPS MP4/HLS 直链。依赖 HTTP、CSP/JAR、JS/drpy 或第三方解析的来源不能使用手机直连模式。原有后端可通过「来源设置 → 连接来源服务」继续使用。
+当前支持含 `sites` 的 TVBox JSON 配置、可搜索的 `type: 0`（XML CMS）和 `type: 1`（JSON CMS）以及 HTTPS MP4/HLS 直链。依赖 HTTP、JS/drpy 或第三方解析的来源不能使用手机直连模式。Android 可通过下方实验入口试用本地 CSP 插件。原有后端可通过「来源设置 → 连接来源服务」继续使用。
+
+## Android CSP 插件试用
+
+更新代码后，在项目根目录重新运行 `py -3 setup_android.py`，再编译安装。右上角选择「导入本地 CSP 插件」，选取你已验证来源的 Android JAR（内含 `classes.dex`）。信任文件后粘贴 HTTPS 订阅，在匹配列表中选择一个 CSP 来源。App 不会下载或执行订阅里的远程插件地址。
+
+订阅的 `spider` 或来源的 `jar` 声明需要提供与本地文件匹配的 `;md5;` 值，用于筛选匹配版本。选择文件时显示 SHA-256，加载前也会重新校验。插件使用 QuickVideo 的应用权限，目前兼容基础 CatVod 搜索、详情与播放 ABI，以及直接返回的 HTTPS 播放链接和请求头。依赖原客户端私有类、本地代理、登录桥接、网页解析或宿主原生库的插件仍可能不可用。插件兼容性以实机结果为准。
 
 ## 通过 Python 来源服务接入 TVBox
 

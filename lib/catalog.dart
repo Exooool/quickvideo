@@ -2,10 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xml/xml.dart';
 
 part 'tvbox.dart';
+part 'csp.dart';
 
 typedef Json = Map<String, dynamic>;
 
@@ -59,11 +61,12 @@ final demo = Work('bundled-demo', '播放测试片', '测试视频')..episodes['
 );
 
 class Playback {
-  const Playback({this.asset, this.uri, this.format});
+  const Playback({this.asset, this.uri, this.format, this.headers = const {}});
 
   final String? asset;
   final Uri? uri;
   final String? format;
+  final Map<String, String> headers;
 }
 
 class SearchResult {
@@ -199,7 +202,11 @@ class WatchEntry {
       gateway: base == null
           ? null
           : data['gatewayKind'] == 'tvbox'
-          ? TvboxGateway(Uri.parse(base))
+          ? TvboxGateway(
+              Uri.parse(base),
+              plugin: CspPlugin.fromJson(data['cspPlugin']),
+              cspSite: data['cspSite'] as String?,
+            )
           : Gateway(Uri.parse(base)),
     );
   }
@@ -209,6 +216,10 @@ class WatchEntry {
     'episode': episode.name, 'lines': episode.lines.map((line) => line.toJson()).toList(),
     'lineKey': lineKey, 'position': position.inMilliseconds, 'gateway': gateway?.base.toString(),
     'gatewayKind': gateway?.kind,
+    if (gateway case final TvboxGateway tvbox) ...{
+      'cspPlugin': tvbox.plugin?.toJson(),
+      'cspSite': tvbox.cspSite,
+    },
   };
 }
 
@@ -223,17 +234,34 @@ class WatchStore {
 
   String? get server => prefs.getString('gateway');
   String? get subscription => prefs.getString('tvboxSubscription');
+  String? get cspSite => prefs.getString('tvboxCspSite');
+  CspPlugin? get cspPlugin {
+    final data = prefs.getString('cspPlugin');
+    return data == null ? null : CspPlugin.fromJson(jsonDecode(data));
+  }
+
+  Future<void> setCspPlugin(CspPlugin plugin) async {
+    await prefs.setString('cspPlugin', jsonEncode(plugin.toJson()));
+  }
 
   Future<void> setSource(Gateway? source) async {
     if (source is TvboxGateway) {
       await prefs.setString('tvboxSubscription', source.base.toString());
+      final cspSite = source.cspSite;
+      if (cspSite == null) {
+        await prefs.remove('tvboxCspSite');
+      } else {
+        await prefs.setString('tvboxCspSite', cspSite);
+      }
       await prefs.remove('gateway');
     } else if (source != null) {
       await prefs.setString('gateway', source.base.toString());
       await prefs.remove('tvboxSubscription');
+      await prefs.remove('tvboxCspSite');
     } else {
       await prefs.remove('gateway');
       await prefs.remove('tvboxSubscription');
+      await prefs.remove('tvboxCspSite');
     }
   }
 
