@@ -58,6 +58,8 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
 
   Future<Playback> _resolve(Line line) async {
     if (line.asset != null) return Playback(asset: line.asset);
+    final gateway = entry.gateway;
+    if (gateway is TvboxGateway) return gateway.resolve(line);
     if (line.url != null) {
       final uri = Uri.parse(line.url!);
       return Playback(uri: uri, format: uri.path.toLowerCase().endsWith('.m3u8') ? 'hls' : null);
@@ -87,6 +89,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
             ? VideoPlayerController.asset(asset)
             : VideoPlayerController.networkUrl(
                 media.uri!,
+                httpHeaders: media.headers,
                 formatHint: media.format == 'hls' ? VideoFormat.hls : null,
               );
         candidate = next;

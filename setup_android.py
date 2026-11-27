@@ -57,6 +57,31 @@ def migrate_main_activity(main):
         path.write_text(updated, encoding="utf-8")
 
 
+def install_csp_runtime(main):
+    template = Path(__file__).resolve().parent / "android_support"
+    if not template.is_dir():
+        raise ValueError("缺少 android_support，请先更新 QuickVideo 源码。")
+    activities = (*main.rglob("MainActivity.kt"), *main.rglob("MainActivity.java"))
+    for activity in activities:
+        source = activity.read_text(encoding="utf-8")
+        bridge = "com.miralume.quickvideo.csp.CspActivity"
+        if bridge not in source:
+            updated, count = re.subn(
+                r"(\bclass MainActivity\s*(?::|extends)\s*)(?:io\.flutter\.embedding\.android\.)?FlutterActivity\b",
+                lambda match: match[1] + bridge,
+                source,
+                count=1,
+            )
+            if not count:
+                raise ValueError(f"{activity} 使用自定义 Activity，请让主 Activity 继承 {bridge}。")
+            updated = re.sub(
+                r"(?m)^import io\.flutter\.embedding\.android\.FlutterActivity;?[^\S\n]*\n",
+                "", updated,
+            )
+            activity.write_text(updated, encoding="utf-8")
+    shutil.copytree(template, main / "java", dirs_exist_ok=True)
+
+
 def configure_android(root):
     path = root / MANIFEST
     if not path.is_file():
@@ -117,6 +142,7 @@ def configure_android(root):
     if path.read_bytes() != buffer:
         path.write_bytes(buffer)
     migrate_main_activity(path.parent)
+    install_csp_runtime(path.parent)
 
     app = root / "android" / "app"
     gradle = next((entry for entry in (app / "build.gradle", app / "build.gradle.kts")
